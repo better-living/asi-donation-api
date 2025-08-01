@@ -1,0 +1,9 @@
+{
+  "name": "asi-donation-backend",
+  "version": "1.0.0",
+  "main": "api/charge.js",
+  "type": "module",
+  "dependencies": {
+    "authorizenet": "^2.0.0"
+  }
+}
