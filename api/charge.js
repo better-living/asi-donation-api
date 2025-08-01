@@ -3,26 +3,39 @@
 import pkg from 'authorizenet';
 const { APIContracts, APIControllers } = pkg;
 
+const sendJson = (res, status, payload) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.status(status).json(payload);
+};
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ success: false, message: 'Method not allowed' });
+  if (req.method === 'OPTIONS') {
+    // Preflight
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.status(204).end();
     return;
+  }
+
+  if (req.method !== 'POST') {
+    return sendJson(res, 405, { success: false, message: 'Method not allowed' });
   }
 
   try {
     const { token, amount } = req.body ?? {};
 
     if (!token || !amount) {
-      res.status(400).json({ success: false, message: 'Missing token or amount' });
-      return;
+      return sendJson(res, 400, { success: false, message: 'Missing token or amount' });
     }
 
     const apiLoginId = process.env.AUTHNET_API_LOGIN_ID;
     const transactionKey = process.env.AUTHNET_TRANSACTION_KEY;
     if (!apiLoginId || !transactionKey) {
       console.error('Missing Authorize.Net credentials', { apiLoginId, transactionKey });
-      res.status(500).json({ success: false, message: 'Payment gateway not configured' });
-      return;
+      return sendJson(res, 500, { success: false, message: 'Payment gateway not configured' });
     }
 
     const merchantAuthenticationType = new APIContracts.MerchantAuthenticationType();
@@ -56,41 +69,10 @@ export default async function handler(req, res) {
     });
 
     if (!result) {
-      res.status(502).json({ success: false, message: 'Null response from gateway' });
-      return;
+      return sendJson(res, 502, { success: false, message: 'Null response from gateway' });
     }
 
-    // Debug log the raw structure (can remove later)
-    console.debug('Authorize.Net raw response:', {
-      messages: result.getMessages?.()?.getMessage ? result.getMessages().getMessage().map(m => ({
-        code: m.getCode?.(),
-        text: m.getText?.()
-      })) : null,
-      transactionResponse: (() => {
-        try {
-          const tr = result.getTransactionResponse?.();
-          if (!tr) return null;
-          return {
-            transId: tr.getTransId?.(),
-            responseCode: tr.getResponseCode?.(),
-            errors: tr.getErrors?.() ? tr.getErrors().map(e => ({
-              errorCode: e.getErrorCode?.(),
-              errorText: e.getErrorText?.()
-            })) : null,
-            messages: tr.getMessages?.() ? tr.getMessages().map(m => ({
-              code: m.getCode?.(),
-              description: m.getDescription?.()
-            })) : null
-          };
-        } catch (e) {
-          return `error reading transactionResponse: ${e.message}`;
-        }
-      })()
-    });
-
-    const resultCode = result.getMessages && result.getMessages().getResultCode
-      ? result.getMessages().getResultCode()
-      : null;
+    const resultCode = result.getMessages?.()?.getResultCode?.();
     const transactionResponse = result.getTransactionResponse?.();
 
     if (
@@ -100,14 +82,12 @@ export default async function handler(req, res) {
       typeof transactionResponse.getMessages === 'function' &&
       transactionResponse.getMessages()
     ) {
-      res.status(200).json({
+      return sendJson(res, 200, {
         success: true,
         transactionId: transactionResponse.getTransId()
       });
-      return;
     }
 
-    // Extract an error message defensively
     let errorMessage = 'Unknown error';
     if (
       transactionResponse &&
@@ -131,10 +111,10 @@ export default async function handler(req, res) {
     }
 
     console.error('Payment failed', { resultCode, errorMessage });
-    res.status(400).json({ success: false, message: errorMessage });
+    return sendJson(res, 400, { success: false, message: errorMessage });
   } catch (err) {
     console.error('Unhandled exception in /api/charge', err);
-    res.status(500).json({
+    return sendJson(res, 500, {
       success: false,
       message: 'Internal server error',
       detail: err.message
