@@ -1,6 +1,7 @@
 // api/charge.js
 
-import { APIContracts, APIControllers } from 'authorizenet';
+import pkg from 'authorizenet';
+const { APIContracts, APIControllers } = pkg;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -9,18 +10,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { token, amount } = await req.json();
+    const { token, amount } = req.body ?? {};
 
     if (!token || !amount) {
       res.status(400).json({ success: false, message: 'Missing token or amount' });
       return;
     }
 
-    // Validate environment variables
     const apiLoginId = process.env.AUTHNET_API_LOGIN_ID;
     const transactionKey = process.env.AUTHNET_TRANSACTION_KEY;
     if (!apiLoginId || !transactionKey) {
-      console.error('Missing Auth.Net credentials in env:', { apiLoginId, transactionKey });
+      console.error('Missing Authorize.Net credentials', { apiLoginId, transactionKey });
       res.status(500).json({ success: false, message: 'Payment gateway not configured' });
       return;
     }
@@ -47,7 +47,6 @@ export default async function handler(req, res) {
 
     const ctrl = new APIControllers.CreateTransactionController(createRequest.getJSON());
 
-    // Wrap callback-style execute in a promise
     const result = await new Promise((resolve) => {
       ctrl.execute(() => {
         const apiResponse = ctrl.getResponse();
@@ -70,7 +69,6 @@ export default async function handler(req, res) {
         transactionId: transactionResponse.getTransId()
       });
     } else {
-      // Try to extract an error message
       let errorMessage = 'Unknown error';
       if (transactionResponse?.getErrors && transactionResponse.getErrors()[0]) {
         errorMessage = transactionResponse.getErrors()[0].getErrorText();
