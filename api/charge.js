@@ -1,10 +1,9 @@
-// api/charge.js
-
 import { APIContracts, APIControllers } from 'authorizenet';
 
 export async function POST(req) {
   const { token, amount } = await req.json();
 
+  // ✅ Load credentials from environment
   const merchantAuthenticationType = new APIContracts.MerchantAuthenticationType();
   merchantAuthenticationType.setName(process.env.AUTHNET_API_LOGIN_ID);
   merchantAuthenticationType.setTransactionKey(process.env.AUTHNET_TRANSACTION_KEY);
