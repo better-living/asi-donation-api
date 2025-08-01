@@ -60,26 +60,84 @@ export default async function handler(req, res) {
       return;
     }
 
-    const resultCode = result.getMessages()?.getResultCode();
-    const transactionResponse = result.getTransactionResponse();
+    // Debug log the raw structure (can remove later)
+    console.debug('Authorize.Net raw response:', {
+      messages: result.getMessages?.()?.getMessage ? result.getMessages().getMessage().map(m => ({
+        code: m.getCode?.(),
+        text: m.getText?.()
+      })) : null,
+      transactionResponse: (() => {
+        try {
+          const tr = result.getTransactionResponse?.();
+          if (!tr) return null;
+          return {
+            transId: tr.getTransId?.(),
+            responseCode: tr.getResponseCode?.(),
+            errors: tr.getErrors?.() ? tr.getErrors().map(e => ({
+              errorCode: e.getErrorCode?.(),
+              errorText: e.getErrorText?.()
+            })) : null,
+            messages: tr.getMessages?.() ? tr.getMessages().map(m => ({
+              code: m.getCode?.(),
+              description: m.getDescription?.()
+            })) : null
+          };
+        } catch (e) {
+          return `error reading transactionResponse: ${e.message}`;
+        }
+      })()
+    });
 
-    if (resultCode === APIContracts.MessageTypeEnum.OK && transactionResponse?.getMessages()) {
+    const resultCode = result.getMessages && result.getMessages().getResultCode
+      ? result.getMessages().getResultCode()
+      : null;
+    const transactionResponse = result.getTransactionResponse?.();
+
+    if (
+      resultCode === APIContracts.MessageTypeEnum.OK &&
+      transactionResponse &&
+      transactionResponse.getMessages &&
+      typeof transactionResponse.getMessages === 'function' &&
+      transactionResponse.getMessages()
+    ) {
       res.status(200).json({
         success: true,
         transactionId: transactionResponse.getTransId()
       });
-    } else {
-      let errorMessage = 'Unknown error';
-      if (transactionResponse?.getErrors && transactionResponse.getErrors()[0]) {
-        errorMessage = transactionResponse.getErrors()[0].getErrorText();
-      } else if (result.getMessages()?.getMessage && result.getMessages().getMessage()[0]) {
-        errorMessage = result.getMessages().getMessage()[0].getText();
-      }
-      console.error('Authorize.Net error', { resultCode, errorMessage, transactionResponse });
-      res.status(400).json({ success: false, message: errorMessage });
+      return;
     }
+
+    // Extract an error message defensively
+    let errorMessage = 'Unknown error';
+    if (
+      transactionResponse &&
+      transactionResponse.getErrors &&
+      typeof transactionResponse.getErrors === 'function' &&
+      transactionResponse.getErrors() &&
+      transactionResponse.getErrors()[0] &&
+      typeof transactionResponse.getErrors()[0].getErrorText === 'function'
+    ) {
+      errorMessage = transactionResponse.getErrors()[0].getErrorText();
+    } else if (
+      result &&
+      result.getMessages &&
+      typeof result.getMessages === 'function' &&
+      result.getMessages().getMessage &&
+      typeof result.getMessages().getMessage === 'function' &&
+      result.getMessages().getMessage()[0] &&
+      typeof result.getMessages().getMessage()[0].getText === 'function'
+    ) {
+      errorMessage = result.getMessages().getMessage()[0].getText();
+    }
+
+    console.error('Payment failed', { resultCode, errorMessage });
+    res.status(400).json({ success: false, message: errorMessage });
   } catch (err) {
     console.error('Unhandled exception in /api/charge', err);
-    res.status(500).json({ success: false, message: 'Internal server error', detail: err.message });
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      detail: err.message
+    });
   }
 }
