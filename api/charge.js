@@ -59,22 +59,14 @@ export default async function handler(req, res) {
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo with name, phone, and full address if provided
+  // Build billTo with name, phone, email (avoid putting address here due to the schema error observed)
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
   if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
+  if (donor.email) billTo.email = donor.email;
 
-  if (donor.address) {
-    const addr = donor.address;
-    if (addr.line) billTo.address = addr.line;
-    if (addr.city) billTo.city = addr.city;
-    if (addr.state) billTo.state = addr.state;
-    if (addr.zip) billTo.zip = addr.zip;
-    if (addr.country) billTo.country = addr.country;
-  }
-
-  // Build userFields: include email and other metadata
+  // Build userFields: address components + other metadata
   const userFields = [];
   if (donor.email) {
     userFields.push({ name: 'email', value: donor.email });
@@ -90,6 +82,14 @@ export default async function handler(req, res) {
   }
   if (monthly_amount !== undefined) {
     userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
+  }
+  if (donor.address) {
+    const addr = donor.address;
+    if (addr.line) userFields.push({ name: 'address_line', value: String(addr.line) });
+    if (addr.city) userFields.push({ name: 'city', value: String(addr.city) });
+    if (addr.state) userFields.push({ name: 'state', value: String(addr.state) });
+    if (addr.zip) userFields.push({ name: 'zip', value: String(addr.zip) });
+    if (addr.country) userFields.push({ name: 'country', value: String(addr.country) });
   }
 
   const endpoint = 'https://api.authorize.net/xml/v1/request.api';
