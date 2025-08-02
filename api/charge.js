@@ -1,4 +1,14 @@
 // api/charge.js
+function escapeXml(unsafe) {
+  if (unsafe == null) return '';
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 export default async function handler(req, res) {
   const allowedOrigins = ['https://asiministries.org'];
   const origin = req.headers.origin;
@@ -52,118 +62,114 @@ export default async function handler(req, res) {
 
   const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
-
   if (!apiLoginID || !transactionKey) {
     return res
       .status(500)
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo with name, phone, email (avoid putting address here due to the schema error observed)
-  const billTo = {};
-  if (donor.first_name) billTo.firstName = donor.first_name;
-  if (donor.last_name) billTo.lastName = donor.last_name;
-  if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
-  if (donor.email) billTo.email = donor.email;
-
-  // Build userFields: address components + other metadata
-  const userFields = [];
+  // Build userFields XML entries
+  const userFieldEntries = [];
   if (donor.email) {
-    userFields.push({ name: 'email', value: donor.email });
+    userFieldEntries.push(`<userField><name>email</name><value>${escapeXml(donor.email)}</value></userField>`);
   }
   if (designation) {
-    userFields.push({ name: 'designation', value: String(designation) });
+    userFieldEntries.push(`<userField><name>designation</name><value>${escapeXml(String(designation))}</value></userField>`);
   }
   if (gift_amount !== undefined) {
-    userFields.push({ name: 'gift_amount', value: String(gift_amount) });
+    userFieldEntries.push(`<userField><name>gift_amount</name><value>${escapeXml(String(gift_amount))}</value></userField>`);
   }
   if (todays_gift !== undefined) {
-    userFields.push({ name: 'todays_gift', value: String(todays_gift) });
+    userFieldEntries.push(`<userField><name>todays_gift</name><value>${escapeXml(String(todays_gift))}</value></userField>`);
   }
   if (monthly_amount !== undefined) {
-    userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
+    userFieldEntries.push(`<userField><name>monthly_amount</name><value>${escapeXml(String(monthly_amount))}</value></userField>`);
   }
   if (donor.address) {
     const addr = donor.address;
-    if (addr.line) userFields.push({ name: 'address_line', value: String(addr.line) });
-    if (addr.city) userFields.push({ name: 'city', value: String(addr.city) });
-    if (addr.state) userFields.push({ name: 'state', value: String(addr.state) });
-    if (addr.zip) userFields.push({ name: 'zip', value: String(addr.zip) });
-    if (addr.country) userFields.push({ name: 'country', value: String(addr.country) });
+    if (addr.line) userFieldEntries.push(`<userField><name>address_line</name><value>${escapeXml(addr.line)}</value></userField>`);
+    if (addr.city) userFieldEntries.push(`<userField><name>city</name><value>${escapeXml(addr.city)}</value></userField>`);
+    if (addr.state) userFieldEntries.push(`<userField><name>state</name><value>${escapeXml(addr.state)}</value></userField>`);
+    if (addr.zip) userFieldEntries.push(`<userField><name>zip</name><value>${escapeXml(addr.zip)}</value></userField>`);
+    if (addr.country) userFieldEntries.push(`<userField><name>country</name><value>${escapeXml(addr.country)}</value></userField>`);
   }
 
-  const endpoint = 'https://api.authorize.net/xml/v1/request.api';
-  const payload = {
-    createTransactionRequest: {
-      merchantAuthentication: {
-        name: apiLoginID,
-        transactionKey: transactionKey,
-      },
-      transactionRequest: {
-        transactionType: 'authCaptureTransaction',
-        amount: formattedAmount,
-        payment: {
-          opaqueData: {
-            dataDescriptor: opaqueData.dataDescriptor,
-            dataValue: opaqueData.dataValue,
-          },
-        },
-        ...(Object.keys(billTo).length ? { billTo } : {}),
-        ...(userFields.length
-          ? {
-              userFields: {
-                userField: userFields,
-              },
-            }
-          : {}),
-      },
-    },
-  };
+  const billToParts = [];
+  if (donor.first_name) billToParts.push(`<firstName>${escapeXml(donor.first_name)}</firstName>`);
+  if (donor.last_name) billToParts.push(`<lastName>${escapeXml(donor.last_name)}</lastName>`);
+  if (donor.address && donor.address.line) billToParts.push(`<address>${escapeXml(donor.address.line)}</address>`);
+  if (donor.address && donor.address.city) billToParts.push(`<city>${escapeXml(donor.address.city)}</city>`);
+  if (donor.address && donor.address.state) billToParts.push(`<state>${escapeXml(donor.address.state)}</state>`);
+  if (donor.address && donor.address.zip) billToParts.push(`<zip>${escapeXml(donor.address.zip)}</zip>`);
+  if (donor.address && donor.address.country) billToParts.push(`<country>${escapeXml(donor.address.country)}</country>`);
+  if (donor.cell_phone) billToParts.push(`<phoneNumber>${escapeXml(donor.cell_phone)}</phoneNumber>`);
+  if (donor.email) billToParts.push(`<email>${escapeXml(donor.email)}</email>`);
+
+  const billToXml = billToParts.length ? `<billTo>${billToParts.join('')}</billTo>` : '';
+
+  const userFieldsXml = userFieldEntries.length
+    ? `<userFields>${userFieldEntries.join('')}</userFields>`
+    : '';
+
+  // Build full XML payload
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<createTransactionRequest xmlns="AnetApi/xml/v1/schema/AnetApiSchema.xsd">
+  <merchantAuthentication>
+    <name>${escapeXml(apiLoginID)}</name>
+    <transactionKey>${escapeXml(transactionKey)}</transactionKey>
+  </merchantAuthentication>
+  <transactionRequest>
+    <transactionType>authCaptureTransaction</transactionType>
+    <amount>${escapeXml(formattedAmount)}</amount>
+    <payment>
+      <opaqueData>
+        <dataDescriptor>${escapeXml(opaqueData.dataDescriptor)}</dataDescriptor>
+        <dataValue>${escapeXml(opaqueData.dataValue)}</dataValue>
+      </opaqueData>
+    </payment>
+    ${billToXml}
+    ${userFieldsXml}
+  </transactionRequest>
+</createTransactionRequest>`;
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch('https://api.authorize.net/xml/v1/request.api', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      headers: {
+        'Content-Type': 'application/xml',
+      },
+      body: xml,
     });
 
-    const status = response.status;
-    const json = await response.json().catch(() => null);
+    const text = await response.text();
+    // Try to parse JSON fallback if they return JSON; otherwise return raw for debugging
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Possibly XML response; send back raw
+    }
 
+    // If JSON parsed, use same logic:
     if (
-      json &&
-      json.messages?.resultCode === 'Ok' &&
-      json.transactionResponse?.responseCode === '1'
+      parsed &&
+      parsed.messages?.resultCode === 'Ok' &&
+      parsed.transactionResponse?.responseCode === '1'
     ) {
       return res.status(200).json({
         success: true,
-        transactionId: json.transactionResponse.transId,
-      });
-    } else {
-      let errMsg = 'Unknown error from gateway';
-      if (
-        json?.transactionResponse?.errors &&
-        Array.isArray(json.transactionResponse.errors) &&
-        json.transactionResponse.errors.length
-      ) {
-        errMsg = json.transactionResponse.errors.map((e) => e.errorText).join('; ');
-      } else if (
-        json?.messages?.message &&
-        Array.isArray(json.messages.message) &&
-        json.messages.message.length
-      ) {
-        errMsg = json.messages.message.map((m) => m.text).join('; ');
-      } else if (json && json.transactionResponse?.responseCode) {
-        errMsg = `Gateway responseCode=${json.transactionResponse.responseCode}`;
-      }
-
-      return res.status(400).json({
-        success: false,
-        error: errMsg,
-        raw: json,
-        httpStatus: status,
+        transactionId: parsed.transactionResponse.transId,
       });
     }
+
+    // If XML or error, attempt to extract some info for debugging
+    // Fallback: return raw response
+    return res.status(400).json({
+      success: false,
+      error: 'Gateway response indicated failure',
+      raw: parsed ?? text,
+      httpStatus: response.status,
+    });
   } catch (err) {
     return res.status(500).json({
       success: false,
