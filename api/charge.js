@@ -49,10 +49,12 @@ export default async function handler(req, res) {
     return res.status(500).json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build minimal billTo with first and last name only
+  // Build billTo with name, phone, email if provided
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
+  if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
+  if (donor.email) billTo.email = donor.email;
 
   const endpoint = 'https://api.authorize.net/xml/v1/request.api';
   const payload = {
