@@ -1,7 +1,7 @@
-// api/donate.js
+// api/charge.js
 export default async function handler(req, res) {
-  // --- CORS setup (only allow your frontend origin) ---
-  const allowedOrigins = ['https://asiministries.org']; // add more if you host on other domains
+  // --- CORS setup (restrict to your frontend origin) ---
+  const allowedOrigins = ['https://asiministries.org']; // add other allowed origins if needed
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -11,7 +11,6 @@ export default async function handler(req, res) {
   res.setHeader('Vary', 'Origin');
 
   if (req.method === 'OPTIONS') {
-    // preflight
     return res.status(204).end();
   }
 
@@ -20,11 +19,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
-  // --- Parse and validate payload ---
-  let body;
+  // --- Parse body safely ---
+  let body = req.body;
   try {
-    body = req.body;
-    // Vercel might already parse JSON; if not, fallback
     if (typeof body === 'string') {
       body = JSON.parse(body);
     }
@@ -32,20 +29,18 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Invalid JSON payload' });
   }
 
-  const { opaqueData, amount } = body ?? {};
+  const { opaqueData, amount, donor = {}, designation, gift_amount, todays_gift, monthly_amount } = body ?? {};
 
   if (!opaqueData || !amount) {
     return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
   }
 
-  // Normalize and validate amount
   const amountNum = parseFloat(amount);
   if (isNaN(amountNum) || amountNum <= 0) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
   const formattedAmount = amountNum.toFixed(2);
 
-  // Validate opaqueData structure
   if (
     typeof opaqueData !== 'object' ||
     !opaqueData.dataDescriptor ||
@@ -54,7 +49,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Malformed opaqueData' });
   }
 
-  // --- Credentials from env ---
+  // --- Credentials from environment ---
   const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
 
@@ -64,7 +59,35 @@ export default async function handler(req, res) {
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // --- Build Authorize.Net request ---
+  // Build billTo/customer if available
+  const billTo = {};
+  if (donor.first_name) billTo.firstName = donor.first_name;
+  if (donor.last_name) billTo.lastName = donor.last_name;
+  if (donor.address) {
+    const addr = donor.address;
+    if (addr.line) billTo.address = addr.line;
+    if (addr.city) billTo.city = addr.city;
+    if (addr.state) billTo.state = addr.state;
+    if (addr.zip) billTo.zip = addr.zip;
+    if (addr.country) billTo.country = addr.country;
+  }
+  if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
+  if (donor.email) billTo.email = donor.email;
+
+  const customer = {};
+  if (donor.email) customer.email = donor.email;
+  // Optionally you could set customer.id if you have a CRM identifier
+
+  // Order info: use designation and gift for invoice/description
+  const order = {};
+  if (designation) order.invoiceNumber = String(designation);
+  const descParts = [];
+  if (gift_amount) descParts.push(`Gift: ${gift_amount}`);
+  if (monthly_amount) descParts.push(`Monthly: ${monthly_amount}`);
+  if (todays_gift) descParts.push(`Today: ${todays_gift}`);
+  if (descParts.length) order.description = descParts.join(' | ');
+
+  // --- Build request payload ---
   const endpoint = 'https://api.authorize.net/xml/v1/request.api';
   const payload = {
     createTransactionRequest: {
@@ -81,6 +104,10 @@ export default async function handler(req, res) {
             dataValue: opaqueData.dataValue,
           },
         },
+        // attach optional structured data if present
+        ...(Object.keys(billTo).length ? { billTo } : {}),
+        ...(Object.keys(customer).length ? { customer } : {}),
+        ...(Object.keys(order).length ? { order } : {}),
       },
     },
   };
@@ -89,17 +116,13 @@ export default async function handler(req, res) {
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      // Optionally you could set a timeout wrapper if needed.
     });
 
     const status = response.status;
     const json = await response.json().catch(() => null);
 
-    // Success criteria: messages.resultCode === 'Ok' and transactionResponse.responseCode === '1'
     if (
       json &&
       json.messages?.resultCode === 'Ok' &&
@@ -110,16 +133,13 @@ export default async function handler(req, res) {
         transactionId: json.transactionResponse.transId,
       });
     } else {
-      // Extract error message
       let errMsg = 'Unknown error from gateway';
       if (
         json?.transactionResponse?.errors &&
         Array.isArray(json.transactionResponse.errors) &&
         json.transactionResponse.errors.length
       ) {
-        errMsg = json.transactionResponse.errors
-          .map((e) => e.errorText)
-          .join('; ');
+        errMsg = json.transactionResponse.errors.map((e) => e.errorText).join('; ');
       } else if (
         json?.messages?.message &&
         Array.isArray(json.messages.message) &&
@@ -138,7 +158,6 @@ export default async function handler(req, res) {
       });
     }
   } catch (err) {
-    // Network or unexpected failure
     return res.status(500).json({
       success: false,
       error: 'Request to payment gateway failed: ' + err.message,
