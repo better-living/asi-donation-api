@@ -31,13 +31,13 @@ export default async function handler(req, res) {
     todays_gift,
     monthly_amount,
     payment_method,
+    echeck,
   } = body ?? {};
 
-  // If user intends eCheck (front-end already posts to webhook, but support fallback)
   const ECHECK_WEBHOOK = 'https://n8n.heavenlyhost.org/webhook/9188d854-9d4e-4b93-b960-02e383afd212';
 
+  // eCheck short-circuit
   if (payment_method === 'echeck') {
-    // Simply forward everything to webhook; no Authorize.Net call.
     const webhookPayload = {
       payment_method: 'echeck',
       amount,
@@ -45,6 +45,7 @@ export default async function handler(req, res) {
       gift_amount: gift_amount ?? null,
       todays_gift: todays_gift ?? null,
       monthly_amount: monthly_amount ?? null,
+      echeck: echeck ?? null,
       raw: body,
       timestamp: new Date().toISOString(),
     };
@@ -99,23 +100,23 @@ export default async function handler(req, res) {
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo with basic name/phone (avoid invalid nested objects)
+  // Build billTo including name, phone, email, and full billing address if provided
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
   if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
-
-  // Compose userFields to include extra metadata (email, address, organization, gift info)
-  const userFields = [];
-  if (donor.email) userFields.push({ name: 'email', value: donor.email });
-  if (donor.organization) userFields.push({ name: 'organization', value: donor.organization });
+  if (donor.email) billTo.email = donor.email;
   if (donor.address) {
-    if (donor.address.line) userFields.push({ name: 'address_line', value: donor.address.line });
-    if (donor.address.city) userFields.push({ name: 'address_city', value: donor.address.city });
-    if (donor.address.state) userFields.push({ name: 'address_state', value: donor.address.state });
-    if (donor.address.zip) userFields.push({ name: 'address_zip', value: donor.address.zip });
-    if (donor.address.country) userFields.push({ name: 'address_country', value: donor.address.country });
+    if (donor.address.line) billTo.address = donor.address.line;
+    if (donor.address.city) billTo.city = donor.address.city;
+    if (donor.address.state) billTo.state = donor.address.state;
+    if (donor.address.zip) billTo.zip = donor.address.zip;
+    if (donor.address.country) billTo.country = donor.address.country;
   }
+
+  // Compose userFields for extra metadata (exclude email since it's in billTo)
+  const userFields = [];
+  if (donor.organization) userFields.push({ name: 'organization', value: donor.organization });
   if (gift_amount != null) userFields.push({ name: 'gift_amount', value: String(gift_amount) });
   if (todays_gift != null) userFields.push({ name: 'todays_gift', value: String(todays_gift) });
   if (monthly_amount != null) userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
