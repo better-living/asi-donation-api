@@ -5,12 +5,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
-  const { opaqueData, amount } = req.body || {};
+  const { opaqueData, amount } = req.body ?? {};
+
   if (!opaqueData || !amount) {
     return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
   }
 
-  // Load credentials from environment (set these in Vercel dashboard)
   const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
 
@@ -18,11 +18,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Choose endpoint: sandbox vs production
-  const isSandbox = true; // flip to false for live
-  const endpoint = isSandbox
-    ? 'https://apitest.authorize.net/xml/v1/request.api'
-    : 'https://api.authorize.net/xml/v1/request.api';
+  const endpoint = 'https://api.authorize.net/xml/v1/request.api';
 
   const payload = {
     createTransactionRequest: {
@@ -50,17 +46,15 @@ export default async function handler(req, res) {
       body: JSON.stringify(payload)
     });
 
-    const json = await r.json();
+    const json = await r.json().catch(() => null);
 
-    const resultCode = json?.transactionResponse?.responseCode;
-    if (json?.messages?.resultCode === 'Ok' && resultCode === '1') {
-      // success
+    if (json?.messages?.resultCode === 'Ok' && json?.transactionResponse?.responseCode === '1') {
       return res.status(200).json({
         success: true,
         transactionId: json.transactionResponse.transId
       });
     } else {
-      // gather error message
+      // extract error
       let errMsg = 'Unknown error';
       if (json?.transactionResponse?.errors && json.transactionResponse.errors.length) {
         errMsg = json.transactionResponse.errors.map(e => e.errorText).join('; ');
