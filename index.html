@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Donate</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script type="text/javascript" src="https://js.authorize.net/v1/Accept.js"></script>
+</head>
+<body>
+  <h2>Make a Donation</h2>
+  <form id="donation-form">
+    <label>
+      Amount (USD):
+      <input type="number" name="amount" step="0.01" min="1" required value="25.00" />
+    </label><br><br>
+
+    <div id="card-fields">
+      <label>
+        Card Number:
+        <input type="text" name="cardNumber" placeholder="4111 1111 1111 1111" required />
+      </label><br><br>
+
+      <label>
+        Expiration (MM):
+        <input type="text" name="expMonth" placeholder="MM" required style="width:60px;" />
+      </label>
+
+      <label>
+        Expiration (YY):
+        <input type="text" name="expYear" placeholder="YY" required style="width:60px;" />
+      </label><br><br>
+
+      <label>
+        CVV:
+        <input type="text" name="cardCode" placeholder="123" required style="width:80px;" />
+      </label><br><br>
+    </div>
+
+    <button type="submit">Donate</button>
+  </form>
+
+  <div id="result" style="margin-top:1em;"></div>
+
+  <script>
+    const form = document.getElementById('donation-form');
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      document.getElementById('result').textContent = 'Processing...';
+
+      const amount = parseFloat(form.amount.value).toFixed(2);
+      const cardData = {
+        cardNumber: form.cardNumber.value.replace(/\s+/g, ''),
+        month: form.expMonth.value,
+        year: form.expYear.value,
+        cardCode: form.cardCode.value,
+      };
+
+      const authData = {
+        clientKey: '<CLIENT_KEY_PLACEHOLDER>',
+        apiLoginID: '<API_LOGIN_ID_PLACEHOLDER>'
+      };
+
+      // Replace placeholders with real values from server if you want dynamic injection.
+      // For simplicity, hardcode clientKey and apiLoginID in this example (safe: they are public).
+      authData.clientKey = '27dj4C5rm7pb93xZhRCYg33Fz52b9bhxtMzuw54v7tNR3jFyMtD242RBeAxJE3pF';
+      authData.apiLoginID = '9eBw5N4m';
+
+      const card = {
+        cardNumber: cardData.cardNumber,
+        expirationDate: `${cardData.month}-${cardData.year}`,
+        cardCode: cardData.cardCode
+      };
+
+      const secureData = {
+        authData: authData,
+        cardData: card
+      };
+
+      Accept.dispatchData(secureData, acceptResponseHandler);
+
+      function acceptResponseHandler(response) {
+        if (response.messages.resultCode === "Error") {
+          const errs = response.messages.message.map(m => m.text).join("; ");
+          document.getElementById('result').textContent = "Tokenization error: " + errs;
+          return;
+        }
+
+        const opaqueData = response.opaqueData;
+        // Send to your serverless function
+        fetch('/api/donate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            opaqueData,
+            amount
+          })
+        })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            document.getElementById('result').textContent = "Donation successful! Transaction ID: " + data.transactionId;
+          } else {
+            document.getElementById('result').textContent = "Donation failed: " + data.error;
+          }
+        })
+        .catch(err => {
+          document.getElementById('result').textContent = "Server error: " + err.message;
+        });
+      }
+    });
+  </script>
+</body>
+</html>
