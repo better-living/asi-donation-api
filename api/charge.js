@@ -128,7 +128,7 @@ export default async function handler(req, res) {
       // Fire-and-forget to n8n but capture failure
       let webhookResult = { success: true };
       try {
-        const hookResp = await fetch('https://n8n.heavenlyhost.org/webhook-test/9188d854-9d4e-4b93-b960-02e383afd212', {
+        const hookResp = await fetch('https://n8n.heavenlyhost.org/webhook/9188d854-9d4e-4b93-b960-02e383afd212', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(webhookPayload),
