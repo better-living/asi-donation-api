@@ -2,112 +2,184 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Donate</title>
+  <title>Make a Donation</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <script type="text/javascript" src="https://js.authorize.net/v1/Accept.js"></script>
+  <style>
+    body {
+      font-family: system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+      max-width: 480px;
+      margin: 2rem auto;
+      padding: 1rem;
+      line-height: 1.4;
+    }
+    label { display: block; margin-bottom: .5rem; }
+    input { width: 100%; padding: .5rem; box-sizing: border-box; margin-top: .25rem; }
+    .small { width: 48%; display: inline-block; }
+    .flex { display: flex; gap: 1%; }
+    button {
+      padding: .75rem 1.25rem;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    #result { margin-top: 1rem; font-weight: 600; }
+    .error { color: #a00; }
+    .success { color: #070; }
+  </style>
+
+  <!-- Switch source depending on sandbox vs production -->
+  <script>
+    // Toggle this to false when you move to live (and adjust your server endpoint accordingly)
+    const isSandbox = true;
+    const acceptJsSrc = isSandbox
+      ? 'https://jstest.authorize.net/v1/Accept.js'
+      : 'https://js.authorize.net/v1/Accept.js';
+    document.write(`<script type="text/javascript" src="${acceptJsSrc}"><\/script>`);
+  </script>
 </head>
 <body>
-  <h2>Make a Donation</h2>
-  <form id="donation-form">
+  <h1>Make a Donation</h1>
+
+  <form id="donation-form" autocomplete="off" novalidate>
     <label>
       Amount (USD):
-      <input type="number" name="amount" step="0.01" min="1" required value="25.00" />
-    </label><br><br>
+      <input type="number" name="amount" step="0.01" min="1" required value="7.00" />
+    </label>
 
-    <div id="card-fields">
-      <label>
-        Card Number:
-        <input type="text" name="cardNumber" placeholder="4111 1111 1111 1111" required />
-      </label><br><br>
+    <label>
+      Card Number:
+      <input type="text" name="cardNumber" placeholder="4111 1111 1111 1111" required inputmode="numeric" autocomplete="cc-number" />
+    </label>
 
-      <label>
+    <div class="flex">
+      <label class="small">
         Expiration (MM):
-        <input type="text" name="expMonth" placeholder="MM" required style="width:60px;" />
+        <input type="text" name="expMonth" placeholder="MM" required maxlength="2" inputmode="numeric" autocomplete="cc-exp-month" />
       </label>
-
-      <label>
+      <label class="small">
         Expiration (YY):
-        <input type="text" name="expYear" placeholder="YY" required style="width:60px;" />
-      </label><br><br>
-
-      <label>
-        CVV:
-        <input type="text" name="cardCode" placeholder="123" required style="width:80px;" />
-      </label><br><br>
+        <input type="text" name="expYear" placeholder="YY or YYYY" required maxlength="4" inputmode="numeric" autocomplete="cc-exp-year" />
+      </label>
     </div>
+
+    <label>
+      CVV:
+      <input type="text" name="cardCode" placeholder="123" required maxlength="4" inputmode="numeric" autocomplete="cc-csc" />
+    </label>
 
     <button type="submit">Donate</button>
   </form>
 
-  <div id="result" style="margin-top:1em;"></div>
+  <div id="result" aria-live="polite"></div>
 
   <script>
-    const form = document.getElementById('donation-form');
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      document.getElementById('result').textContent = 'Processing...';
+    // Wait until Accept.js has loaded
+    function onReady() {
+      if (typeof Accept === 'undefined' || !Accept.dispatchData) {
+        setTimeout(onReady, 100);
+        return;
+      }
+      const form = document.getElementById('donation-form');
+      const resultEl = document.getElementById('result');
 
-      const amount = parseFloat(form.amount.value).toFixed(2);
-      const cardData = {
-        cardNumber: form.cardNumber.value.replace(/\s+/g, ''),
-        month: form.expMonth.value,
-        year: form.expYear.value,
-        cardCode: form.cardCode.value,
-      };
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        resultEl.textContent = '';
+        resultEl.className = '';
 
-      const authData = {
-        clientKey: '<CLIENT_KEY_PLACEHOLDER>',
-        apiLoginID: '<API_LOGIN_ID_PLACEHOLDER>'
-      };
+        // Gather and sanitize inputs
+        const amountRaw = form.amount.value;
+        const amount = parseFloat(amountRaw).toFixed(2);
+        const cardNumber = form.cardNumber.value.replace(/\s+/g, '').trim();
+        const expMonth = form.expMonth.value.trim();
+        const expYear = form.expYear.value.trim();
+        const cardCode = form.cardCode.value.trim();
 
-      // Replace placeholders with real values from server if you want dynamic injection.
-      // For simplicity, hardcode clientKey and apiLoginID in this example (safe: they are public).
-      authData.clientKey = '27dj4C5rm7pb93xZhRCYg33Fz52b9bhxtMzuw54v7tNR3jFyMtD242RBeAxJE3pF';
-      authData.apiLoginID = '9eBw5N4m';
-
-      const card = {
-        cardNumber: cardData.cardNumber,
-        expirationDate: `${cardData.month}-${cardData.year}`,
-        cardCode: cardData.cardCode
-      };
-
-      const secureData = {
-        authData: authData,
-        cardData: card
-      };
-
-      Accept.dispatchData(secureData, acceptResponseHandler);
-
-      function acceptResponseHandler(response) {
-        if (response.messages.resultCode === "Error") {
-          const errs = response.messages.message.map(m => m.text).join("; ");
-          document.getElementById('result').textContent = "Tokenization error: " + errs;
+        if (!amount || Number(amount) <= 0) {
+          showError('Invalid amount.');
+          return;
+        }
+        if (!/^\d{1,2}$/.test(expMonth) || Number(expMonth) < 1 || Number(expMonth) > 12) {
+          showError('Expiration month must be 01–12.');
+          return;
+        }
+        if (!/^\d{2,4}$/.test(expYear)) {
+          showError('Expiration year must be YY or YYYY.');
           return;
         }
 
-        const opaqueData = response.opaqueData;
-        // Send to your serverless function
-        fetch('/api/donate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            opaqueData,
-            amount
-          })
-        })
-        .then(r => r.json())
-        .then(data => {
-          if (data.success) {
-            document.getElementById('result').textContent = "Donation successful! Transaction ID: " + data.transactionId;
-          } else {
-            document.getElementById('result').textContent = "Donation failed: " + data.error;
+        showMessage('Tokenizing card...', false);
+
+        const authData = {
+          clientKey: '27dj4C5rm7pb93xZhRCYg33Fz52b9bhxtMzuw54v7tNR3jFyMtD242RBeAxJE3pF', // public
+          apiLoginID: '9eBw5N4m' // public
+        };
+
+        const secureData = {
+          authData: authData,
+          cardData: {
+            cardNumber: cardNumber,
+            month: expMonth,
+            year: expYear,
+            cardCode: cardCode
           }
-        })
-        .catch(err => {
-          document.getElementById('result').textContent = "Server error: " + err.message;
-        });
-      }
-    });
+        };
+
+        Accept.dispatchData(secureData, acceptResponseHandler);
+
+        function acceptResponseHandler(response) {
+          if (response.messages.resultCode === "Error") {
+            const messages = response.messages.message.map(m => m.text).join("; ");
+            showError("Tokenization error: " + messages);
+            return;
+          }
+
+          const opaqueData = response.opaqueData;
+
+          // Send to serverless function
+          fetch('/api/donate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              opaqueData,
+              amount
+            })
+          })
+          .then(async r => {
+            const json = await r.json().catch(() => null);
+            if (!r.ok) {
+              const err = (json && json.error) ? json.error : `HTTP ${r.status}`;
+              showError('Donation failed: ' + err);
+              console.error('Raw response:', json);
+              return;
+            }
+            if (json.success) {
+              showSuccess('Donation successful! Transaction ID: ' + json.transactionId);
+            } else {
+              showError('Donation failed: ' + (json.error || 'Unknown error'));
+              console.error('Gateway response:', json.raw || json);
+            }
+          })
+          .catch(err => {
+            showError('Server error: ' + err.message);
+            console.error(err);
+          });
+        }
+
+        function showError(msg) {
+          resultEl.textContent = msg;
+          resultEl.className = 'error';
+        }
+        function showSuccess(msg) {
+          resultEl.textContent = msg;
+          resultEl.className = 'success';
+        }
+        function showMessage(msg, isError) {
+          resultEl.textContent = msg;
+          resultEl.className = isError ? 'error' : '';
+        }
+      });
+    }
+    onReady();
   </script>
 </body>
 </html>
