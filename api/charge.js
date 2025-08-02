@@ -68,32 +68,7 @@ export default async function handler(req, res) {
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build userFields XML entries
-  const userFieldEntries = [];
-  if (donor.email) {
-    userFieldEntries.push(`<userField><name>email</name><value>${escapeXml(donor.email)}</value></userField>`);
-  }
-  if (designation) {
-    userFieldEntries.push(`<userField><name>designation</name><value>${escapeXml(String(designation))}</value></userField>`);
-  }
-  if (gift_amount !== undefined) {
-    userFieldEntries.push(`<userField><name>gift_amount</name><value>${escapeXml(String(gift_amount))}</value></userField>`);
-  }
-  if (todays_gift !== undefined) {
-    userFieldEntries.push(`<userField><name>todays_gift</name><value>${escapeXml(String(todays_gift))}</value></userField>`);
-  }
-  if (monthly_amount !== undefined) {
-    userFieldEntries.push(`<userField><name>monthly_amount</name><value>${escapeXml(String(monthly_amount))}</value></userField>`);
-  }
-  if (donor.address) {
-    const addr = donor.address;
-    if (addr.line) userFieldEntries.push(`<userField><name>address_line</name><value>${escapeXml(addr.line)}</value></userField>`);
-    if (addr.city) userFieldEntries.push(`<userField><name>city</name><value>${escapeXml(addr.city)}</value></userField>`);
-    if (addr.state) userFieldEntries.push(`<userField><name>state</name><value>${escapeXml(addr.state)}</value></userField>`);
-    if (addr.zip) userFieldEntries.push(`<userField><name>zip</name><value>${escapeXml(addr.zip)}</value></userField>`);
-    if (addr.country) userFieldEntries.push(`<userField><name>country</name><value>${escapeXml(addr.country)}</value></userField>`);
-  }
-
+  // Build billTo XML parts (name, email, phone, address)
   const billToParts = [];
   if (donor.first_name) billToParts.push(`<firstName>${escapeXml(donor.first_name)}</firstName>`);
   if (donor.last_name) billToParts.push(`<lastName>${escapeXml(donor.last_name)}</lastName>`);
@@ -102,16 +77,53 @@ export default async function handler(req, res) {
   if (donor.address && donor.address.state) billToParts.push(`<state>${escapeXml(donor.address.state)}</state>`);
   if (donor.address && donor.address.zip) billToParts.push(`<zip>${escapeXml(donor.address.zip)}</zip>`);
   if (donor.address && donor.address.country) billToParts.push(`<country>${escapeXml(donor.address.country)}</country>`);
-  if (donor.cell_phone) billToParts.push(`<phoneNumber>${escapeXml(donor.cell_phone)}</phoneNumber>`);
   if (donor.email) billToParts.push(`<email>${escapeXml(donor.email)}</email>`);
+  if (donor.cell_phone) billToParts.push(`<phoneNumber>${escapeXml(donor.cell_phone)}</phoneNumber>`);
 
   const billToXml = billToParts.length ? `<billTo>${billToParts.join('')}</billTo>` : '';
+
+  // Build userFields: designation + description + breakdown
+  const userFieldEntries = [];
+
+  if (designation) {
+    userFieldEntries.push(
+      `<userField><name>designation</name><value>${escapeXml(String(designation))}</value></userField>`
+    );
+  }
+
+  // Human-friendly description combining key pieces
+  const descParts = [];
+  if (gift_amount !== undefined) descParts.push(`Gift: ${gift_amount}`);
+  if (todays_gift !== undefined) descParts.push(`Today: ${todays_gift}`);
+  if (monthly_amount !== undefined) descParts.push(`Monthly: ${monthly_amount}`);
+  if (descParts.length) {
+    userFieldEntries.push(
+      `<userField><name>description</name><value>${escapeXml(descParts.join(' | '))}</value></userField>`
+    );
+  }
+
+  // Optional granular fields
+  if (gift_amount !== undefined) {
+    userFieldEntries.push(
+      `<userField><name>gift_amount</name><value>${escapeXml(String(gift_amount))}</value></userField>`
+    );
+  }
+  if (todays_gift !== undefined) {
+    userFieldEntries.push(
+      `<userField><name>todays_gift</name><value>${escapeXml(String(todays_gift))}</value></userField>`
+    );
+  }
+  if (monthly_amount !== undefined) {
+    userFieldEntries.push(
+      `<userField><name>monthly_amount</name><value>${escapeXml(String(monthly_amount))}</value></userField>`
+    );
+  }
 
   const userFieldsXml = userFieldEntries.length
     ? `<userFields>${userFieldEntries.join('')}</userFields>`
     : '';
 
-  // Build full XML payload
+  // Full XML payload
   const xml = `<?xml version="1.0" encoding="utf-8"?>
 <createTransactionRequest xmlns="AnetApi/xml/v1/schema/AnetApiSchema.xsd">
   <merchantAuthentication>
@@ -142,32 +154,29 @@ export default async function handler(req, res) {
     });
 
     const text = await response.text();
-    // Try to parse JSON fallback if they return JSON; otherwise return raw for debugging
-    let parsed;
+    let parsedJson = null;
     try {
-      parsed = JSON.parse(text);
+      parsedJson = JSON.parse(text);
     } catch {
-      // Possibly XML response; send back raw
+      // response may be XML; fall back to raw
     }
 
-    // If JSON parsed, use same logic:
     if (
-      parsed &&
-      parsed.messages?.resultCode === 'Ok' &&
-      parsed.transactionResponse?.responseCode === '1'
+      parsedJson &&
+      parsedJson.messages?.resultCode === 'Ok' &&
+      parsedJson.transactionResponse?.responseCode === '1'
     ) {
       return res.status(200).json({
         success: true,
-        transactionId: parsed.transactionResponse.transId,
+        transactionId: parsedJson.transactionResponse.transId,
       });
     }
 
-    // If XML or error, attempt to extract some info for debugging
-    // Fallback: return raw response
+    // If JSON parsing failed or gateway error, return raw for debugging
     return res.status(400).json({
       success: false,
-      error: 'Gateway response indicated failure',
-      raw: parsed ?? text,
+      error: 'Gateway failure or unexpected response',
+      raw: parsedJson ?? text,
       httpStatus: response.status,
     });
   } catch (err) {
