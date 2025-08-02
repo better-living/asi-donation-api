@@ -1,123 +1,147 @@
-// api/charge.js
-
-import pkg from 'authorizenet';
-const { APIContracts, APIControllers } = pkg;
-
-const sendJson = (res, status, payload) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+// api/donate.js
+export default async function handler(req, res) {
+  // --- CORS setup (only allow your frontend origin) ---
+  const allowedOrigins = ['https://asiministries.org']; // add more if you host on other domains
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.status(status).json(payload);
-};
+  res.setHeader('Vary', 'Origin');
 
-export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
-    // Preflight
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.status(204).end();
-    return;
+    // preflight
+    return res.status(204).end();
   }
 
   if (req.method !== 'POST') {
-    return sendJson(res, 405, { success: false, message: 'Method not allowed' });
+    res.setHeader('Allow', 'POST, OPTIONS');
+    return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
+  // --- Parse and validate payload ---
+  let body;
   try {
-    const { token, amount } = req.body ?? {};
-
-    if (!token || !amount) {
-      return sendJson(res, 400, { success: false, message: 'Missing token or amount' });
+    body = req.body;
+    // Vercel might already parse JSON; if not, fallback
+    if (typeof body === 'string') {
+      body = JSON.parse(body);
     }
+  } catch (e) {
+    return res.status(400).json({ success: false, error: 'Invalid JSON payload' });
+  }
 
-    const apiLoginId = process.env.AUTHNET_API_LOGIN_ID;
-    const transactionKey = process.env.AUTHNET_TRANSACTION_KEY;
-    if (!apiLoginId || !transactionKey) {
-      console.error('Missing Authorize.Net credentials', { apiLoginId, transactionKey });
-      return sendJson(res, 500, { success: false, message: 'Payment gateway not configured' });
-    }
+  const { opaqueData, amount } = body ?? {};
 
-    const merchantAuthenticationType = new APIContracts.MerchantAuthenticationType();
-    merchantAuthenticationType.setName(apiLoginId);
-    merchantAuthenticationType.setTransactionKey(transactionKey);
+  if (!opaqueData || !amount) {
+    return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
+  }
 
-    const opaqueData = new APIContracts.OpaqueDataType();
-    opaqueData.setDataDescriptor('COMMON.ACCEPT.INAPP.PAYMENT');
-    opaqueData.setDataValue(token);
+  // Normalize and validate amount
+  const amountNum = parseFloat(amount);
+  if (isNaN(amountNum) || amountNum <= 0) {
+    return res.status(400).json({ success: false, error: 'Invalid amount' });
+  }
+  const formattedAmount = amountNum.toFixed(2);
 
-    const paymentType = new APIContracts.PaymentType();
-    paymentType.setOpaqueData(opaqueData);
+  // Validate opaqueData structure
+  if (
+    typeof opaqueData !== 'object' ||
+    !opaqueData.dataDescriptor ||
+    !opaqueData.dataValue
+  ) {
+    return res.status(400).json({ success: false, error: 'Malformed opaqueData' });
+  }
 
-    const transactionRequestType = new APIContracts.TransactionRequestType();
-    transactionRequestType.setTransactionType(APIContracts.TransactionTypeEnum.AUTHCAPTURETRANSACTION);
-    transactionRequestType.setPayment(paymentType);
-    transactionRequestType.setAmount(parseFloat(amount));
+  // --- Credentials from env ---
+  const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
+  const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
 
-    const createRequest = new APIContracts.CreateTransactionRequest();
-    createRequest.setMerchantAuthentication(merchantAuthenticationType);
-    createRequest.setTransactionRequest(transactionRequestType);
+  if (!apiLoginID || !transactionKey) {
+    return res
+      .status(500)
+      .json({ success: false, error: 'Server misconfigured: missing credentials' });
+  }
 
-    const ctrl = new APIControllers.CreateTransactionController(createRequest.getJSON());
+  // --- Build Authorize.Net request ---
+  const endpoint = 'https://api.authorize.net/xml/v1/request.api';
+  const payload = {
+    createTransactionRequest: {
+      merchantAuthentication: {
+        name: apiLoginID,
+        transactionKey: transactionKey,
+      },
+      transactionRequest: {
+        transactionType: 'authCaptureTransaction',
+        amount: formattedAmount,
+        payment: {
+          opaqueData: {
+            dataDescriptor: opaqueData.dataDescriptor,
+            dataValue: opaqueData.dataValue,
+          },
+        },
+      },
+    },
+  };
 
-    const result = await new Promise((resolve) => {
-      ctrl.execute(() => {
-        const apiResponse = ctrl.getResponse();
-        const response = new APIContracts.CreateTransactionResponse(apiResponse);
-        resolve(response);
-      });
+  // --- Send to Authorize.Net ---
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      // Optionally you could set a timeout wrapper if needed.
     });
 
-    if (!result) {
-      return sendJson(res, 502, { success: false, message: 'Null response from gateway' });
-    }
+    const status = response.status;
+    const json = await response.json().catch(() => null);
 
-    const resultCode = result.getMessages?.()?.getResultCode?.();
-    const transactionResponse = result.getTransactionResponse?.();
-
+    // Success criteria: messages.resultCode === 'Ok' and transactionResponse.responseCode === '1'
     if (
-      resultCode === APIContracts.MessageTypeEnum.OK &&
-      transactionResponse &&
-      transactionResponse.getMessages &&
-      typeof transactionResponse.getMessages === 'function' &&
-      transactionResponse.getMessages()
+      json &&
+      json.messages?.resultCode === 'Ok' &&
+      json.transactionResponse?.responseCode === '1'
     ) {
-      return sendJson(res, 200, {
+      return res.status(200).json({
         success: true,
-        transactionId: transactionResponse.getTransId()
+        transactionId: json.transactionResponse.transId,
+      });
+    } else {
+      // Extract error message
+      let errMsg = 'Unknown error from gateway';
+      if (
+        json?.transactionResponse?.errors &&
+        Array.isArray(json.transactionResponse.errors) &&
+        json.transactionResponse.errors.length
+      ) {
+        errMsg = json.transactionResponse.errors
+          .map((e) => e.errorText)
+          .join('; ');
+      } else if (
+        json?.messages?.message &&
+        Array.isArray(json.messages.message) &&
+        json.messages.message.length
+      ) {
+        errMsg = json.messages.message.map((m) => m.text).join('; ');
+      } else if (json && json.transactionResponse?.responseCode) {
+        errMsg = `Gateway responseCode=${json.transactionResponse.responseCode}`;
+      }
+
+      return res.status(400).json({
+        success: false,
+        error: errMsg,
+        raw: json,
+        httpStatus: status,
       });
     }
-
-    let errorMessage = 'Unknown error';
-    if (
-      transactionResponse &&
-      transactionResponse.getErrors &&
-      typeof transactionResponse.getErrors === 'function' &&
-      transactionResponse.getErrors() &&
-      transactionResponse.getErrors()[0] &&
-      typeof transactionResponse.getErrors()[0].getErrorText === 'function'
-    ) {
-      errorMessage = transactionResponse.getErrors()[0].getErrorText();
-    } else if (
-      result &&
-      result.getMessages &&
-      typeof result.getMessages === 'function' &&
-      result.getMessages().getMessage &&
-      typeof result.getMessages().getMessage === 'function' &&
-      result.getMessages().getMessage()[0] &&
-      typeof result.getMessages().getMessage()[0].getText === 'function'
-    ) {
-      errorMessage = result.getMessages().getMessage()[0].getText();
-    }
-
-    console.error('Payment failed', { resultCode, errorMessage });
-    return sendJson(res, 400, { success: false, message: errorMessage });
   } catch (err) {
-    console.error('Unhandled exception in /api/charge', err);
-    return sendJson(res, 500, {
+    // Network or unexpected failure
+    return res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      detail: err.message
+      error: 'Request to payment gateway failed: ' + err.message,
     });
   }
 }
