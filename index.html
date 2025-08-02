@@ -26,15 +26,8 @@
     .success { color: #070; }
   </style>
 
-  <!-- Switch source depending on sandbox vs production -->
-  <script>
-    // Toggle this to false when you move to live (and adjust your server endpoint accordingly)
-    const isSandbox = true;
-    const acceptJsSrc = isSandbox
-      ? 'https://jstest.authorize.net/v1/Accept.js'
-      : 'https://js.authorize.net/v1/Accept.js';
-    document.write(`<script type="text/javascript" src="${acceptJsSrc}"><\/script>`);
-  </script>
+  <!-- Live Accept.js -->
+  <script src="https://js.authorize.net/v1/Accept.js"></script>
 </head>
 <body>
   <h1>Make a Donation</h1>
@@ -72,12 +65,13 @@
   <div id="result" aria-live="polite"></div>
 
   <script>
-    // Wait until Accept.js has loaded
+    // Wait until Accept.js is loaded
     function onReady() {
       if (typeof Accept === 'undefined' || !Accept.dispatchData) {
         setTimeout(onReady, 100);
         return;
       }
+
       const form = document.getElementById('donation-form');
       const resultEl = document.getElementById('result');
 
@@ -86,7 +80,7 @@
         resultEl.textContent = '';
         resultEl.className = '';
 
-        // Gather and sanitize inputs
+        // Gather + sanitize
         const amountRaw = form.amount.value;
         const amount = parseFloat(amountRaw).toFixed(2);
         const cardNumber = form.cardNumber.value.replace(/\s+/g, '').trim();
@@ -95,19 +89,16 @@
         const cardCode = form.cardCode.value.trim();
 
         if (!amount || Number(amount) <= 0) {
-          showError('Invalid amount.');
-          return;
+          return showError('Invalid amount.');
         }
         if (!/^\d{1,2}$/.test(expMonth) || Number(expMonth) < 1 || Number(expMonth) > 12) {
-          showError('Expiration month must be 01–12.');
-          return;
+          return showError('Expiration month must be 01–12.');
         }
         if (!/^\d{2,4}$/.test(expYear)) {
-          showError('Expiration year must be YY or YYYY.');
-          return;
+          return showError('Expiration year must be YY or YYYY.');
         }
 
-        showMessage('Tokenizing card...', false);
+        showMessage('Tokenizing card...');
 
         const authData = {
           clientKey: '27dj4C5rm7pb93xZhRCYg33Fz52b9bhxtMzuw54v7tNR3jFyMtD242RBeAxJE3pF', // public
@@ -124,18 +115,18 @@
           }
         };
 
+        // Dispatch to Authorize.Net to get opaqueData
         Accept.dispatchData(secureData, acceptResponseHandler);
 
         function acceptResponseHandler(response) {
           if (response.messages.resultCode === "Error") {
             const messages = response.messages.message.map(m => m.text).join("; ");
-            showError("Tokenization error: " + messages);
-            return;
+            return showError("Tokenization error: " + messages);
           }
 
           const opaqueData = response.opaqueData;
 
-          // Send to serverless function
+          // Send to your serverless function
           fetch('/api/donate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -173,9 +164,9 @@
           resultEl.textContent = msg;
           resultEl.className = 'success';
         }
-        function showMessage(msg, isError) {
+        function showMessage(msg) {
           resultEl.textContent = msg;
-          resultEl.className = isError ? 'error' : '';
+          resultEl.className = '';
         }
       });
     }
