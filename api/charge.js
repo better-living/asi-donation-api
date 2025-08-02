@@ -1,7 +1,6 @@
 // api/charge.js
 export default async function handler(req, res) {
-  // --- CORS setup (restrict to your frontend origin) ---
-  const allowedOrigins = ['https://asiministries.org']; // add other allowed origins if needed
+  const allowedOrigins = ['https://asiministries.org'];
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
@@ -10,21 +9,16 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Vary', 'Origin');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-
+  if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, OPTIONS');
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
-  // --- Parse body safely ---
+  // Parse body
   let body = req.body;
   try {
-    if (typeof body === 'string') {
-      body = JSON.parse(body);
-    }
+    if (typeof body === 'string') body = JSON.parse(body);
   } catch (e) {
     return res.status(400).json({ success: false, error: 'Invalid JSON payload' });
   }
@@ -49,17 +43,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Malformed opaqueData' });
   }
 
-  // --- Credentials from environment ---
   const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
 
   if (!apiLoginID || !transactionKey) {
-    return res
-      .status(500)
-      .json({ success: false, error: 'Server misconfigured: missing credentials' });
+    return res.status(500).json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo/customer if available
+  // Build billTo
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
@@ -74,11 +65,7 @@ export default async function handler(req, res) {
   if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
   if (donor.email) billTo.email = donor.email;
 
-  const customer = {};
-  if (donor.email) customer.email = donor.email;
-  // Optionally you could set customer.id if you have a CRM identifier
-
-  // Order info: use designation and gift for invoice/description
+  // Order info
   const order = {};
   if (designation) order.invoiceNumber = String(designation);
   const descParts = [];
@@ -87,7 +74,7 @@ export default async function handler(req, res) {
   if (todays_gift) descParts.push(`Today: ${todays_gift}`);
   if (descParts.length) order.description = descParts.join(' | ');
 
-  // --- Build request payload ---
+  // Build Authorize.Net payload
   const endpoint = 'https://api.authorize.net/xml/v1/request.api';
   const payload = {
     createTransactionRequest: {
@@ -104,15 +91,12 @@ export default async function handler(req, res) {
             dataValue: opaqueData.dataValue,
           },
         },
-        // attach optional structured data if present
         ...(Object.keys(billTo).length ? { billTo } : {}),
-        ...(Object.keys(customer).length ? { customer } : {}),
         ...(Object.keys(order).length ? { order } : {}),
       },
     },
   };
 
-  // --- Send to Authorize.Net ---
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
