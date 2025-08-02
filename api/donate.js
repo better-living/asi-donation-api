@@ -15,7 +15,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
-  // Body parsing
+  // Parse body
   let body = req.body;
   try {
     if (typeof body === 'string') body = JSON.parse(body);
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
 
   const ECHECK_WEBHOOK = 'https://n8n.heavenlyhost.org/webhook/9188d854-9d4e-4b93-b960-02e383afd212';
 
-  // eCheck short-circuit
+  // eCheck path
   if (payment_method === 'echeck') {
     const webhookPayload = {
       payment_method: 'echeck',
@@ -73,17 +73,15 @@ export default async function handler(req, res) {
     }
   }
 
-  // Credit card path: require opaqueData and amount
+  // Credit card path validation
   if (!opaqueData || !amount) {
     return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
   }
-
   const amountNum = parseFloat(amount);
   if (isNaN(amountNum) || amountNum <= 0) {
     return res.status(400).json({ success: false, error: 'Invalid amount' });
   }
   const formattedAmount = amountNum.toFixed(2);
-
   if (
     typeof opaqueData !== 'object' ||
     !opaqueData.dataDescriptor ||
@@ -95,12 +93,13 @@ export default async function handler(req, res) {
   const apiLoginID = process.env.AUTH_NET_API_LOGIN_ID;
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
   if (!apiLoginID || !transactionKey) {
-    return res
-      .status(500)
-      .json({ success: false, error: 'Server misconfigured: missing credentials' });
+    return res.status(500).json({
+      success: false,
+      error: 'Server misconfigured: missing credentials',
+    });
   }
 
-  // Build billTo including name, phone, email, and flat billing address fields
+  // Build billTo explicitly, ensuring address is a string
   const billTo = {};
   if (donor.first_name) billTo.firstName = String(donor.first_name);
   if (donor.last_name) billTo.lastName = String(donor.last_name);
@@ -110,7 +109,7 @@ export default async function handler(req, res) {
   if (donor.address) {
     if (typeof donor.address === 'string') {
       billTo.address = donor.address;
-    } else {
+    } else if (typeof donor.address === 'object' && donor.address !== null) {
       if (donor.address.line) billTo.address = String(donor.address.line);
       if (donor.address.city) billTo.city = String(donor.address.city);
       if (donor.address.state) billTo.state = String(donor.address.state);
@@ -122,58 +121,64 @@ export default async function handler(req, res) {
     }
   }
 
-  // Compose userFields for extra metadata (exclude email since it's in billTo)
-  const userFields = [];
-  if (donor.organization) userFields.push({ name: 'organization', value: String(donor.organization) });
-  if (gift_amount != null) userFields.push({ name: 'gift_amount', value: String(gift_amount) });
-  if (todays_gift != null) userFields.push({ name: 'todays_gift', value: String(todays_gift) });
-  if (monthly_amount != null) userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
+  // Build userFields array
+  const userFieldsArray = [];
+  if (donor.organization) userFieldsArray.push({ name: 'organization', value: String(donor.organization) });
+  if (gift_amount != null) userFieldsArray.push({ name: 'gift_amount', value: String(gift_amount) });
+  if (todays_gift != null) userFieldsArray.push({ name: 'todays_gift', value: String(todays_gift) });
+  if (monthly_amount != null) userFieldsArray.push({ name: 'monthly_amount', value: String(monthly_amount) });
 
-  // Build Authorize.Net request payload
-  const endpoint = 'https://api.authorize.net/xml/v1/request.api';
-  const createTransactionRequest = {
-    merchantAuthentication: {
-      name: apiLoginID,
-      transactionKey: transactionKey,
-    },
-    transactionRequest: {
-      transactionType: 'authCaptureTransaction',
-      amount: formattedAmount,
-      payment: {
-        opaqueData: {
-          dataDescriptor: opaqueData.dataDescriptor,
-          dataValue: opaqueData.dataValue,
-        },
+  // Construct transactionRequest explicitly
+  const transactionRequest = {
+    transactionType: 'authCaptureTransaction',
+    amount: formattedAmount,
+    payment: {
+      opaqueData: {
+        dataDescriptor: opaqueData.dataDescriptor,
+        dataValue: opaqueData.dataValue,
       },
-      ...(Object.keys(billTo).length ? { billTo } : {}),
-      ...(userFields.length ? { userFields: { userField: userFields } } : {}),
     },
   };
 
-  const payload = { createTransactionRequest };
+  if (Object.keys(billTo).length) {
+    transactionRequest.billTo = billTo;
+  }
+  if (userFieldsArray.length) {
+    transactionRequest.userFields = { userField: userFieldsArray };
+  }
+
+  const requestBody = {
+    createTransactionRequest: {
+      merchantAuthentication: {
+        name: apiLoginID,
+        transactionKey: transactionKey,
+      },
+      transactionRequest,
+    },
+  };
 
   let gatewayResponse = null;
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch('https://api.authorize.net/xml/v1/request.api', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(requestBody),
     });
 
     const status = response.status;
     const json = await response.json().catch(() => null);
     gatewayResponse = json;
 
-    const successCondition =
+    const successful =
       json &&
       json.messages?.resultCode === 'Ok' &&
       json.transactionResponse?.responseCode === '1';
 
-    if (successCondition) {
+    if (successful) {
       const transactionId = json.transactionResponse.transId;
 
-      // Webhook payload to n8n
+      // Prepare webhook payload
       const webhookPayload = {
         payment_method: 'credit_card',
         transactionId,
@@ -193,7 +198,7 @@ export default async function handler(req, res) {
         timestamp: new Date().toISOString(),
       };
 
-      // Send to webhook
+      // Fire-and-forget webhook
       let webhookResult = { success: true };
       try {
         const hookResp = await fetch(ECHECK_WEBHOOK, {
@@ -203,11 +208,7 @@ export default async function handler(req, res) {
         });
         if (!hookResp.ok) {
           const text = await hookResp.text().catch(() => '');
-          webhookResult = {
-            success: false,
-            status: hookResp.status,
-            body: text,
-          };
+          webhookResult = { success: false, status: hookResp.status, body: text };
         }
       } catch (err) {
         webhookResult = { success: false, error: err.message };
@@ -219,33 +220,31 @@ export default async function handler(req, res) {
         webhook: webhookResult,
       });
     } else {
-      // Log payload structure for debugging (excluding sensitive tokens)
-      console.error('Authorize.Net failure payload:', JSON.stringify({
+      // Log structured payload (sanitized) for debugging
+      console.error('Authorize.Net request failed. Sent payload:', JSON.stringify({
         createTransactionRequest: {
           merchantAuthentication: { name: apiLoginID, transactionKey: 'REDACTED' },
           transactionRequest: {
-            transactionType: 'authCaptureTransaction',
-            amount: formattedAmount,
-            billTo,
-            userFields: userFields.length ? { userField: userFields } : undefined,
-          }
-        }
+            ...transactionRequest,
+            payment: { opaqueData: { dataDescriptor: 'REDACTED', dataValue: 'REDACTED' } },
+          },
+        },
       }, null, 2));
 
-      // Extract error message with priority
+      // Extract error details
       let errMsg = 'Unknown error from gateway';
       if (
         json?.transactionResponse?.errors &&
         Array.isArray(json.transactionResponse.errors) &&
         json.transactionResponse.errors.length
       ) {
-        errMsg = json.transactionResponse.errors.map((e) => e.errorText).join('; ');
+        errMsg = json.transactionResponse.errors.map(e => e.errorText).join('; ');
       } else if (
         json?.messages?.message &&
         Array.isArray(json.messages.message) &&
         json.messages.message.length
       ) {
-        errMsg = json.messages.message.map((m) => m.text).join('; ');
+        errMsg = json.messages.message.map(m => m.text).join('; ');
       } else if (json && json.transactionResponse?.responseCode) {
         errMsg = `Gateway responseCode=${json.transactionResponse.responseCode}`;
       }
