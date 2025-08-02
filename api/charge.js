@@ -22,7 +22,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Invalid JSON payload' });
   }
 
-  const { opaqueData, amount, donor = {}, designation, gift_amount, todays_gift, monthly_amount } = body ?? {};
+  const {
+    opaqueData,
+    amount,
+    donor = {},
+    designation,
+    gift_amount,
+    todays_gift,
+    monthly_amount,
+  } = body ?? {};
 
   if (!opaqueData || !amount) {
     return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
@@ -46,16 +54,27 @@ export default async function handler(req, res) {
   const transactionKey = process.env.AUTH_NET_TRANSACTION_KEY;
 
   if (!apiLoginID || !transactionKey) {
-    return res.status(500).json({ success: false, error: 'Server misconfigured: missing credentials' });
+    return res
+      .status(500)
+      .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo: name + phone (email goes to userFields)
+  // Build billTo with name, phone, and full address if provided
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
   if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
 
-  // Build userFields array: include email and optionally other metadata
+  if (donor.address) {
+    const addr = donor.address;
+    if (addr.line) billTo.address = addr.line;
+    if (addr.city) billTo.city = addr.city;
+    if (addr.state) billTo.state = addr.state;
+    if (addr.zip) billTo.zip = addr.zip;
+    if (addr.country) billTo.country = addr.country;
+  }
+
+  // Build userFields: include email and other metadata
   const userFields = [];
   if (donor.email) {
     userFields.push({ name: 'email', value: donor.email });
