@@ -100,23 +100,31 @@ export default async function handler(req, res) {
       .json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo including name, phone, email, and full billing address if provided
+  // Build billTo including name, phone, email, and flat billing address fields
   const billTo = {};
-  if (donor.first_name) billTo.firstName = donor.first_name;
-  if (donor.last_name) billTo.lastName = donor.last_name;
-  if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
-  if (donor.email) billTo.email = donor.email;
+  if (donor.first_name) billTo.firstName = String(donor.first_name);
+  if (donor.last_name) billTo.lastName = String(donor.last_name);
+  if (donor.cell_phone) billTo.phoneNumber = String(donor.cell_phone);
+  if (donor.email) billTo.email = String(donor.email);
+
   if (donor.address) {
-    if (donor.address.line) billTo.address = donor.address.line;
-    if (donor.address.city) billTo.city = donor.address.city;
-    if (donor.address.state) billTo.state = donor.address.state;
-    if (donor.address.zip) billTo.zip = donor.address.zip;
-    if (donor.address.country) billTo.country = donor.address.country;
+    if (typeof donor.address === 'string') {
+      billTo.address = donor.address;
+    } else {
+      if (donor.address.line) billTo.address = String(donor.address.line);
+      if (donor.address.city) billTo.city = String(donor.address.city);
+      if (donor.address.state) billTo.state = String(donor.address.state);
+      if (donor.address.zip) billTo.zip = String(donor.address.zip);
+      if (donor.address.country) {
+        const c = String(donor.address.country).trim();
+        billTo.country = (c === 'United States' || c === 'US') ? 'USA' : c;
+      }
+    }
   }
 
   // Compose userFields for extra metadata (exclude email since it's in billTo)
   const userFields = [];
-  if (donor.organization) userFields.push({ name: 'organization', value: donor.organization });
+  if (donor.organization) userFields.push({ name: 'organization', value: String(donor.organization) });
   if (gift_amount != null) userFields.push({ name: 'gift_amount', value: String(gift_amount) });
   if (todays_gift != null) userFields.push({ name: 'todays_gift', value: String(todays_gift) });
   if (monthly_amount != null) userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
@@ -211,6 +219,19 @@ export default async function handler(req, res) {
         webhook: webhookResult,
       });
     } else {
+      // Log payload structure for debugging (excluding sensitive tokens)
+      console.error('Authorize.Net failure payload:', JSON.stringify({
+        createTransactionRequest: {
+          merchantAuthentication: { name: apiLoginID, transactionKey: 'REDACTED' },
+          transactionRequest: {
+            transactionType: 'authCaptureTransaction',
+            amount: formattedAmount,
+            billTo,
+            userFields: userFields.length ? { userField: userFields } : undefined,
+          }
+        }
+      }, null, 2));
+
       // Extract error message with priority
       let errMsg = 'Unknown error from gateway';
       if (
