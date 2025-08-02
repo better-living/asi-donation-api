@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'Invalid JSON payload' });
   }
 
-  const { opaqueData, amount, donor = {} } = body ?? {};
+  const { opaqueData, amount, donor = {}, designation, gift_amount, todays_gift, monthly_amount } = body ?? {};
 
   if (!opaqueData || !amount) {
     return res.status(400).json({ success: false, error: 'Missing opaqueData or amount' });
@@ -49,12 +49,29 @@ export default async function handler(req, res) {
     return res.status(500).json({ success: false, error: 'Server misconfigured: missing credentials' });
   }
 
-  // Build billTo with name, phone, email if provided
+  // Build billTo: name + phone (email goes to userFields)
   const billTo = {};
   if (donor.first_name) billTo.firstName = donor.first_name;
   if (donor.last_name) billTo.lastName = donor.last_name;
   if (donor.cell_phone) billTo.phoneNumber = donor.cell_phone;
-  if (donor.email) billTo.email = donor.email;
+
+  // Build userFields array: include email and optionally other metadata
+  const userFields = [];
+  if (donor.email) {
+    userFields.push({ name: 'email', value: donor.email });
+  }
+  if (designation) {
+    userFields.push({ name: 'designation', value: String(designation) });
+  }
+  if (gift_amount !== undefined) {
+    userFields.push({ name: 'gift_amount', value: String(gift_amount) });
+  }
+  if (todays_gift !== undefined) {
+    userFields.push({ name: 'todays_gift', value: String(todays_gift) });
+  }
+  if (monthly_amount !== undefined) {
+    userFields.push({ name: 'monthly_amount', value: String(monthly_amount) });
+  }
 
   const endpoint = 'https://api.authorize.net/xml/v1/request.api';
   const payload = {
@@ -73,6 +90,13 @@ export default async function handler(req, res) {
           },
         },
         ...(Object.keys(billTo).length ? { billTo } : {}),
+        ...(userFields.length
+          ? {
+              userFields: {
+                userField: userFields,
+              },
+            }
+          : {}),
       },
     },
   };
